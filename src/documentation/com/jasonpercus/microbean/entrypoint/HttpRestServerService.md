@@ -16,7 +16,7 @@ Il démarre un serveur HTTP embarqué, découvre les controllers annotés, const
   - `HttpServer` / `HttpExchange` (JDK)
   - `ObjectMapper` (Jackson)
   - `RouteDefinition`, `RouteParam`, `ParameterType`
-  - annotations API (`@Controller`, `@Path`, `@Query`, `@Header`, `@Body`, `@Status`, `@Get`...)
+  - annotations API (`@Controller`, `@Path`, `@Query`, `@Header`, `@Body`, `@Get`...)
 - Utilisé par:
   - Runtime MicroBean au démarrage des entrypoints
 - Concepts liés:
@@ -51,7 +51,7 @@ Il démarre un serveur HTTP embarqué, découvre les controllers annotés, const
 | `resolveRoute(String, String)`                          | `RouteResolution`           | `private`        | Sélectionne la route cible et calcule `Allow`.           |
 | `buildArguments(RouteDefinition, HttpExchange, String)` | `Object[]`                  | `private`        | Résout les arguments Java à partir de la requête HTTP.   |
 | `convert(String, Class<?>, String)`                     | `Object`                    | `private`        | Convertit une valeur texte vers un type supporté.        |
-| `writeResponse(HttpExchange, Object, Method, boolean)`  | `void`                      | `private`        | Ecrit une réponse succès (204/200/@Status).              |
+| `writeResponse(HttpExchange, Object, Method, boolean)`  | `void`                      | `private`        | Ecrit une réponse succès (204/200).                      |
 | `writeError(HttpExchange, int, String, String)`         | `void`                      | `private`        | Ecrit une erreur JSON standardisée.                      |
 | `invokeController(RouteDefinition, Object[])`           | `Object`                    | `private`        | Appelle la méthode controller et mappe les exceptions.   |
 | `validateRouteUniqueness()`                             | `void`                      | `private`        | Détecte les collisions de routes.                        |

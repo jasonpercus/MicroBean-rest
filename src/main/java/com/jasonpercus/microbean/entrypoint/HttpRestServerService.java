@@ -9,6 +9,7 @@ package com.jasonpercus.microbean.entrypoint;
 
 import static com.jasonpercus.microbean.infrastructure.helpers.LogHelper.error;
 import static com.jasonpercus.microbean.infrastructure.helpers.LogHelper.trace;
+import static com.jasonpercus.microbean.infrastructure.helpers.LogHelper.warn;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jasonpercus.microbean.MicroBean;
 import com.jasonpercus.microbean.api.ApplicationEntryPoint;
@@ -37,7 +39,7 @@ import com.jasonpercus.microbean.api.Header;
 import com.jasonpercus.microbean.api.LifecycleEntryPoint;
 import com.jasonpercus.microbean.api.Path;
 import com.jasonpercus.microbean.api.Query;
-import com.jasonpercus.microbean.api.Status;
+import com.jasonpercus.microbean.api.ResponseEntity;
 import com.jasonpercus.microbean.api.method.Delete;
 import com.jasonpercus.microbean.api.method.Get;
 import com.jasonpercus.microbean.api.method.Head;
@@ -93,6 +95,8 @@ public class HttpRestServerService implements ApplicationEntryPoint {
     private static final String CONTENT_TYPE = "Content-Type";
     /** Code HTTP 200. */
     public static final int OK = 200;
+    /** Code HTTP 200. */
+    public static final int CREATED = 201;
     /** Code HTTP 204. */
     public static final int NO_CONTENT = 204;
     /** Code HTTP 400. */
@@ -194,6 +198,21 @@ public class HttpRestServerService implements ApplicationEntryPoint {
      * @param method méthode candidate.
      */
     private void parseMethod(Object controller, Method method) {
+
+        if (!method.getReturnType().equals(ResponseEntity.class)) {
+
+            if (method.isAnnotationPresent(Get.class) ||
+                method.isAnnotationPresent(Post.class) ||
+                method.isAnnotationPresent(Put.class) ||
+                method.isAnnotationPresent(Delete.class) ||
+                method.isAnnotationPresent(Patch.class) ||
+                method.isAnnotationPresent(Options.class) ||
+                method.isAnnotationPresent(Head.class)) {
+                warn("Method " + method.getName() + " in controller " + controller.getClass().getName()
+                        + " must return ResponseEntity<R> to be exposed as a REST endpoint.");
+            }
+            return;
+        }
 
         HttpBinding binding = resolveHttpBinding(method);
         if (binding == null)
@@ -382,9 +401,9 @@ public class HttpRestServerService implements ApplicationEntryPoint {
             trace("[" + method + "] " + path + " ➠ " + route.getMethod().getName());
 
             Object[] args = buildArguments(route, exchange, path);
-            Object result = invokeController(route, args);
+            ResponseEntity<?> result = invokeController(route, args);
 
-            writeResponse(exchange, result, route.getMethod(), METHOD_HEAD.equals(method));
+            writeResponse(exchange, result, METHOD_HEAD.equals(method));
         } catch (HttpErrorException exception) {
             writeError(exchange, exception.status(), exception.code(), exception.getMessage());
         }
@@ -628,6 +647,9 @@ public class HttpRestServerService implements ApplicationEntryPoint {
             if (type == String.class)
                 return value;
 
+            if (type == UUID.class)
+                return UUID.fromString(value);
+
             if (type == Integer.class || type == int.class)
                 return Integer.parseInt(value);
 
@@ -682,27 +704,31 @@ public class HttpRestServerService implements ApplicationEntryPoint {
      * Ecrit une réponse HTTP standard (succès).
      *
      * @param exchange échange HTTP courant.
-     * @param result résultat de méthode controller.
-     * @param method méthode controller appelée.
+     * @param responseEntity résultat de méthode controller.
      * @param headRequest indique si la requête initiale est de type HEAD.
      * @throws Exception en cas d'erreur de sérialisation/écriture.
      */
-    private void writeResponse(HttpExchange exchange, Object result, Method method, boolean headRequest) throws Exception {
+    private void writeResponse(HttpExchange exchange, ResponseEntity<?> responseEntity, boolean headRequest) throws Exception {
 
-        if (result == null) {
-            exchange.sendResponseHeaders(NO_CONTENT, -1);
+        if (responseEntity == null) {
+            exchange.sendResponseHeaders(NOT_FOUND, -1);
 
-            trace(" ⤷ Response: %d (-1 bytes)".formatted(NO_CONTENT));
+            trace(" ⤷ Response: %d (-1 bytes)".formatted(NOT_FOUND));
             return;
         }
 
-        int status = OK;
+        Object body = responseEntity.getBody();
+        int status = responseEntity.getCode() < 100 ? NOT_FOUND : responseEntity.getCode();
 
-        Status statusAnnotation = method.getAnnotation(Status.class);
-        if (statusAnnotation != null)
-            status = statusAnnotation.value();
+        if (body == null) {
 
-        byte[] bytes = serialize(result);
+            exchange.sendResponseHeaders(status, -1);
+
+            trace(" ⤷ Response: %d (-1 bytes)".formatted(status));
+            return;
+        }
+
+        byte[] bytes = serialize(body);
 
         exchange.getResponseHeaders().add(CONTENT_TYPE, APPLICATION_JSON);
         exchange.sendResponseHeaders(status, bytes.length);
@@ -762,9 +788,9 @@ public class HttpRestServerService implements ApplicationEntryPoint {
      * @return résultat de la méthode controller.
      * @throws Exception erreur d'invocation encapsulée.
      */
-    private Object invokeController(RouteDefinition route, Object[] args) throws Exception {
+    private ResponseEntity<?> invokeController(RouteDefinition route, Object[] args) throws Exception {
         try {
-            return route.getMethod().invoke(route.getControllerInstance(), args);
+            return (ResponseEntity<?>) route.getMethod().invoke(route.getControllerInstance(), args);
         } catch (InvocationTargetException invocationTargetException) {
 
             Throwable cause = invocationTargetException.getTargetException();

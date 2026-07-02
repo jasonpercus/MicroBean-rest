@@ -145,7 +145,6 @@ export MICROBEAN_HTTP_PORT=8080
 
 - `@Controller("/basePath")`
 - `@Get`, `@Post`, `@Put`, `@Delete`, `@Patch`, `@Head`, `@Options`
-- `@Status(code)` pour personnaliser le statut de réponse
 
 ### Annotations de paramètres
 
@@ -162,7 +161,6 @@ package com.example;
 import com.jasonpercus.microbean.api.Body;
 import com.jasonpercus.microbean.api.Controller;
 import com.jasonpercus.microbean.api.Path;
-import com.jasonpercus.microbean.api.Status;
 import com.jasonpercus.microbean.api.method.Get;
 import com.jasonpercus.microbean.api.method.Post;
 
@@ -175,12 +173,12 @@ public class UserController {
     }
 
     @Post
-    @Status(201)
     public User create(@Body User user) {
         return user;
     }
 
-    public record User(long id, String name) {}
+    public record User(long id, String name) {
+    }
 }
 ```
 
@@ -240,7 +238,6 @@ Le projet contient des tests unitaires/intégration ciblant la couche REST et le
   - [`src/documentation/com/jasonpercus/microbean/api/Path.md`](src/documentation/com/jasonpercus/microbean/api/Path.md)
   - [`src/documentation/com/jasonpercus/microbean/api/Query.md`](src/documentation/com/jasonpercus/microbean/api/Query.md)
   - [`src/documentation/com/jasonpercus/microbean/api/Header.md`](src/documentation/com/jasonpercus/microbean/api/Header.md)
-  - [`src/documentation/com/jasonpercus/microbean/api/Status.md`](src/documentation/com/jasonpercus/microbean/api/Status.md)
 - Verbes HTTP
   - [`src/documentation/com/jasonpercus/microbean/api/method/Get.md`](src/documentation/com/jasonpercus/microbean/api/method/Get.md)
   - [`src/documentation/com/jasonpercus/microbean/api/method/Post.md`](src/documentation/com/jasonpercus/microbean/api/method/Post.md)
