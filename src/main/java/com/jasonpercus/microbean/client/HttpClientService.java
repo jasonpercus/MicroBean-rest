@@ -12,13 +12,26 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.ProtocolException;
+import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.function.Consumer;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jasonpercus.microbean.api.ResponseEntity;
+import com.jasonpercus.microbean.infrastructure.async.JobHandle;
+import com.jasonpercus.microbean.infrastructure.async.JobResponse;
+import com.jasonpercus.microbean.infrastructure.async.JobStatus;
+import jakarta.websocket.ContainerProvider;
+import jakarta.websocket.Endpoint;
+import jakarta.websocket.EndpointConfig;
+import jakarta.websocket.Session;
+import jakarta.websocket.WebSocketContainer;
 
 /**
  * Client HTTP fluent permettant de consommer facilement les routes exposées par
@@ -88,9 +101,15 @@ public class HttpClientService {
     private static final String SEPARATOR = "/";
     /** Délai d'attente par défaut pour la connexion et la lecture. */
     private static final int TIMEOUT_MS = 10000;
+    /** Pattern pour vérifier le format d'une URL. */
+    private static final Pattern URL_PATTERN = Pattern.compile("^((?<protocole>\\w+)://)?(?<host>[^:]*)(:(?<port>\\d+))?(?<path>/.*)?$");
 
     /** URL de base du client, normalisée au format absolu sans slash terminal. */
     private final String baseUrl;
+
+    /** URL de base du client WebSocket, normalisée au format absolu sans slash terminal. */
+    private final String baseUrlWebSocket;
+
     /** Sérialiseur/désérialiseur JSON utilisé pour les corps de requête et de réponse. */
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -112,6 +131,34 @@ public class HttpClientService {
      */
     public HttpClientService(String baseUrl) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
+        this.baseUrlWebSocket = null;
+    }
+
+    /**
+     * Crée un client HTTP basé sur une URL de base.
+     *
+     * <p>Si la valeur fournie est {@code null} ou vide, le client utilise
+     * {@code http://localhost}. Si l'URL ne commence pas par un schéma,
+     * {@code http://} est ajouté automatiquement.</p>
+     *
+     * <p>Exemples :</p>
+     * <pre>{@code
+     * new HttpClientService("http://localhost:80");
+     * new HttpClientService("localhost:8080"); // devient http://localhost:8080
+     * new HttpClientService(null);               // devient http://localhost
+     * }</pre>
+     *
+     * @param baseUrl URL de base de l'API à consommer.
+     */
+    public HttpClientService(String baseUrl, int portWebSocket) {
+        this.baseUrl = normalizeBaseUrl(baseUrl);
+
+        Matcher matcher = URL_PATTERN.matcher(this.baseUrl);
+        if (matcher.matches()) {
+            this.baseUrlWebSocket = "ws://" + matcher.group("host") + ":" + portWebSocket;
+        } else {
+            this.baseUrlWebSocket = null;
+        }
     }
 
     /**
@@ -209,7 +256,7 @@ public class HttpClientService {
         if (url == null || url.isBlank())
             return "http://localhost";
         
-        String normalized = url.startsWith("http") ? url : "http://" + url;
+        String normalized = url.startsWith("http") ? url : url.startsWith("ws") ? url : "http://" + url;
         
         if (normalized.endsWith(SEPARATOR))
             normalized = normalized.substring(0, normalized.length() - 1);
@@ -376,6 +423,81 @@ public class HttpClientService {
          */
         public HttpResponse<Void> execute() throws IOException {
             return execute(Void.class);
+        }
+
+        /**
+         * Exécute la requête de manière asynchrone et appelle le callback à la fin.
+         *
+         * @param responseType type cible pour la désérialisation JSON.
+         * @param onSuccess callback appelé en cas de succès.
+         * @param onError callback appelé en cas d'erreur.
+         * @return un Future représentant l'exécution de la requête.
+         * @param <T> type de retour attendu.
+         * @throws IOException si la connexion ou la lecture réseau échoue.
+         */
+        public <T> HttpResponse<JobHandle> executeAsync(Class<T> responseType, Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError) throws IOException {
+
+            HttpResponse<JobHandle> response = execute(JobHandle.class);
+
+            JobHandle handle = response.getData();
+
+            String wsUrl = handle.wsUrl();
+
+            if (wsUrl != null) {
+                connectWebSocket(baseUrlWebSocket + wsUrl, responseType, onSuccess, onError);
+            }
+
+            return response;
+        }
+
+        /**
+         * Se connecte à un WebSocket pour recevoir les messages de progression d'une requête asynchrone.
+         *
+         * @param wsUrl URL du WebSocket.
+         * @param onSuccess callback appelé en cas de succès.
+         * @param onError callback appelé en cas d'erreur.
+         * @param <T> type de retour attendu.
+         */
+        private <T> void connectWebSocket(String wsUrl, Class<T> type, Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError) {
+
+            try {
+                WebSocketContainer container = ContainerProvider.getWebSocketContainer();
+
+                container.connectToServer(new Endpoint() {
+
+                    @Override
+                    public void onOpen(Session session, EndpointConfig config) {
+
+                        session.addMessageHandler(String.class, msg -> {
+                            try {
+                                ObjectMapper mapper = new ObjectMapper();
+
+                                JobResponse response = mapper.readValue(msg, JobResponse.class);
+
+                                if (response.status() == JobStatus.DONE) {
+                                    T result = mapper.convertValue(response.result(), type);
+                                    onSuccess.accept(new ResponseEntity<T>()
+                                            .ok()
+                                            .setBody(result));
+                                    session.close();
+                                }
+
+                                if (response.status() == JobStatus.FAILED) {
+                                    onError.accept(new RuntimeException("Job failed"));
+                                    session.close();
+                                }
+
+                            } catch (Exception e) {
+                                onError.accept(e);
+                            }
+                        });
+                    }
+
+                }, URI.create(wsUrl));
+
+            } catch (Exception e) {
+                onError.accept(e);
+            }
         }
 
         /**

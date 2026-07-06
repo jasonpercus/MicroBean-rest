@@ -29,9 +29,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jasonpercus.microbean.MicroBean;
 import com.jasonpercus.microbean.api.ApplicationEntryPoint;
+import com.jasonpercus.microbean.api.AsyncJob;
 import com.jasonpercus.microbean.api.Body;
 import com.jasonpercus.microbean.api.Controller;
 import com.jasonpercus.microbean.api.EntryPointService;
@@ -50,8 +53,11 @@ import com.jasonpercus.microbean.api.method.Put;
 import com.jasonpercus.microbean.infrastructure.ParameterType;
 import com.jasonpercus.microbean.infrastructure.RouteDefinition;
 import com.jasonpercus.microbean.infrastructure.RouteParam;
+import com.jasonpercus.microbean.infrastructure.async.AsyncJobManager;
+import com.jasonpercus.microbean.infrastructure.async.JobWebSocketEndpoint;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import org.glassfish.tyrus.server.Server;
 
 /**
  * Point d'entrée REST HTTP de MicroBean.
@@ -93,10 +99,13 @@ public class HttpRestServerService implements ApplicationEntryPoint {
     private static final String METHOD_PATCH = "PATCH";
     /** Nom du header Content-Type. */
     private static final String CONTENT_TYPE = "Content-Type";
-    /** Code HTTP 200. */
-    public static final int OK = 200;
-    /** Code HTTP 200. */
-    public static final int CREATED = 201;
+
+    /** Période en secondes avant de nettoyer les résultats non récupérés */
+    private static final AtomicInteger TIME_SEC_CLEAN_PERIOD = new AtomicInteger(30);
+
+    /** Manager des jobs asynchrones pour le support WebSocket. */
+    public static final AsyncJobManager ASYNC_JOB_MANAGER = new AsyncJobManager(TIME_SEC_CLEAN_PERIOD, Executors.newFixedThreadPool(10));
+
     /** Code HTTP 204. */
     public static final int NO_CONTENT = 204;
     /** Code HTTP 400. */
@@ -120,6 +129,9 @@ public class HttpRestServerService implements ApplicationEntryPoint {
     /** Instance de serveur HTTP embarqué. */
     private HttpServer server;
 
+    /** Détermine si le serveur WebSocket pour les jobs asynchrones est utilisé. */
+    private boolean useWebSocket = false;
+
     /**
      * Initialise et démarre le serveur REST.
      *
@@ -138,9 +150,18 @@ public class HttpRestServerService implements ApplicationEntryPoint {
     public void main(String[] strings) throws Exception {
 
         int port = getPort();
+        int portWs = getPortWs();
+        loadTimeSecCleanPeriod();
 
         scanControllers();
         buildServer(port);
+
+        if (useWebSocket && portWs > 0) {
+            JobWebSocketEndpoint.setJobManager(ASYNC_JOB_MANAGER);
+            Server wsServer = new Server("localhost", portWs, "/", null, JobWebSocketEndpoint.class);
+            wsServer.start();
+        }
+
         server.start();
 
         trace("⚙️ Rest server started on port: " + port);
@@ -166,6 +187,52 @@ public class HttpRestServerService implements ApplicationEntryPoint {
             }
         }
         return port;
+    }
+
+    /**
+     * Lit le port WS depuis l'environnement.
+     *
+     * <p>Utilise {@code MICROBEAN_WS_PORT} si défini, sinon retourne 8080.</p>
+     *
+     * @return port HTTP à utiliser.
+     */
+    private static int getPortWs() {
+        int port = 8080;
+
+        String microbeanWsPort = System.getenv("MICROBEAN_WS_PORT");
+        if (microbeanWsPort != null) {
+            try {
+                port = Integer.parseInt(microbeanWsPort);
+            } catch (NumberFormatException e) {
+                error("❌ Invalid port number in MICROBEAN_WS_PORT environment variable: " + microbeanWsPort, e);
+                throw e;
+            }
+        }
+        return port;
+    }
+
+    /**
+     * Charge la période en secondes des nettoyages
+     *
+     * <p>Utilise {@code MICROBEAN_TIME_SEC_CLEAN_PERIOD} si défini.</p>
+     */
+    private static void loadTimeSecCleanPeriod() {
+        String sec = System.getenv("MICROBEAN_TIME_SEC_CLEAN_PERIOD");
+
+        int period;
+
+        if (sec != null) {
+            try {
+                period = Integer.parseInt(sec);
+
+                if (period >= 5) {
+                    TIME_SEC_CLEAN_PERIOD.set(period);
+                }
+            } catch (NumberFormatException e) {
+                error("❌ Invalid period number in MICROBEAN_TIME_SEC_CLEAN_PERIOD environment variable: " + sec, e);
+                throw e;
+            }
+        }
     }
 
     /**
@@ -213,6 +280,8 @@ public class HttpRestServerService implements ApplicationEntryPoint {
             }
             return;
         }
+
+        useWebSocket |= method.isAnnotationPresent(AsyncJob.class);
 
         HttpBinding binding = resolveHttpBinding(method);
         if (binding == null)
