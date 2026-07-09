@@ -456,7 +456,11 @@ public class HttpRestServerService implements ApplicationEntryPoint {
                     return;
                 }
 
-                if (resolution.allowedMethods().isEmpty()) {
+                Set<String> allowedMethods = resolution.allowedMethods();
+
+                if (allowedMethods.isEmpty()
+                        || (allowedMethods.size() == 1 && allowedMethods.contains(METHOD_OPTIONS))) {
+
                     exchange.sendResponseHeaders(NOT_FOUND, -1);
                     return;
                 }

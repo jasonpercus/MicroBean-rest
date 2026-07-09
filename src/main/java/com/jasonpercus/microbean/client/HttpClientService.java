@@ -149,6 +149,7 @@ public class HttpClientService {
      * }</pre>
      *
      * @param baseUrl URL de base de l'API à consommer.
+     * @param portWebSocket port de la WebSocket pour le retour de l'api
      */
     public HttpClientService(String baseUrl, int portWebSocket) {
         this.baseUrl = normalizeBaseUrl(baseUrl);
@@ -441,11 +442,13 @@ public class HttpClientService {
 
             JobHandle handle = response.getData();
 
+            if (handle == null)
+                return response;
+
             String wsUrl = handle.wsUrl();
 
-            if (wsUrl != null) {
+            if (wsUrl != null)
                 connectWebSocket(baseUrlWebSocket + wsUrl, responseType, onSuccess, onError);
-            }
 
             return response;
         }
