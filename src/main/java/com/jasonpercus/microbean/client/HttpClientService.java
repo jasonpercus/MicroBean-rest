@@ -16,12 +16,15 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JavaType;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jasonpercus.microbean.api.ResponseEntity;
 import com.jasonpercus.microbean.infrastructure.async.JobHandle;
@@ -400,11 +403,12 @@ public class HttpClientService {
          * {@link HttpResponse#getBodyAsString()} et {@link HttpResponse#getRawBody()}.</p>
          *
          * @param responseType type cible pour la désérialisation JSON.
+         * @param genericTypes types génériques pour la désérialisation JSON.
          * @param <T> type de retour attendu.
          * @return réponse HTTP enrichie.
          * @throws IOException si la connexion ou la lecture réseau échoue.
          */
-        public <T> HttpResponse<T> execute(Class<T> responseType) throws IOException {
+        public <T> HttpResponse<T> execute(Class<T> responseType, Class<?>...genericTypes) throws IOException {
             
             HttpURLConnection connection = openConnection();
             
@@ -429,14 +433,15 @@ public class HttpClientService {
         /**
          * Exécute la requête de manière asynchrone et appelle le callback à la fin.
          *
-         * @param responseType type cible pour la désérialisation JSON.
          * @param onSuccess callback appelé en cas de succès.
          * @param onError callback appelé en cas d'erreur.
+         * @param responseType type cible pour la désérialisation JSON.
+         * @param genericTypes types génériques pour la désérialisation JSON.
          * @return un Future représentant l'exécution de la requête.
          * @param <T> type de retour attendu.
          * @throws IOException si la connexion ou la lecture réseau échoue.
          */
-        public <T> HttpResponse<JobHandle> executeAsync(Class<T> responseType, Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError) throws IOException {
+        public <T> HttpResponse<JobHandle> executeAsync(Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError, Class<T> responseType, Class<?>...genericTypes) throws IOException {
 
             HttpResponse<JobHandle> response = execute(JobHandle.class);
 
@@ -448,7 +453,7 @@ public class HttpClientService {
             String wsUrl = handle.wsUrl();
 
             if (wsUrl != null)
-                connectWebSocket(baseUrlWebSocket + wsUrl, responseType, onSuccess, onError);
+                connectWebSocket(baseUrlWebSocket + wsUrl, onSuccess, onError, responseType, genericTypes);
 
             return response;
         }
@@ -459,9 +464,11 @@ public class HttpClientService {
          * @param wsUrl URL du WebSocket.
          * @param onSuccess callback appelé en cas de succès.
          * @param onError callback appelé en cas d'erreur.
+         * @param type type cible pour la désérialisation JSON.
+         * @param genericTypes types génériques pour la désérialisation JSON.
          * @param <T> type de retour attendu.
          */
-        private <T> void connectWebSocket(String wsUrl, Class<T> type, Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError) {
+        private <T> void connectWebSocket(String wsUrl, Consumer<ResponseEntity<T>> onSuccess, Consumer<Throwable> onError, Class<T> type, Class<?>...genericTypes) {
 
             try {
                 WebSocketContainer container = ContainerProvider.getWebSocketContainer();
@@ -478,7 +485,16 @@ public class HttpClientService {
                                 JobResponse response = mapper.readValue(msg, JobResponse.class);
 
                                 if (response.status() == JobStatus.DONE) {
-                                    T result = mapper.convertValue(response.result(), type);
+
+                                    T result;
+
+                                    if (genericTypes != null && genericTypes.length > 0) {
+                                        JavaType javaType = mapper.getTypeFactory().constructParametricType(type, genericTypes);
+                                        result = mapper.convertValue(response.result(), javaType);
+                                    } else {
+                                        result = mapper.convertValue(response.result(), type);
+                                    }
+
                                     onSuccess.accept(new ResponseEntity<T>()
                                             .ok()
                                             .setBody(result));
@@ -659,11 +675,12 @@ public class HttpClientService {
          *
          * @param connection connexion HTTP déjà exécutée.
          * @param responseType type cible pour la désérialisation JSON.
+         * @param genericTypes types génériques pour la désérialisation JSON.
          * @param <T> type générique du résultat.
          * @return réponse HTTP enrichie.
          * @throws IOException si la récupération du code ou des flux échoue.
          */
-        private <T> HttpResponse<T> parseResponse(HttpURLConnection connection, Class<T> responseType) throws IOException {
+        private <T> HttpResponse<T> parseResponse(HttpURLConnection connection, Class<T> responseType, Class<?>...genericTypes) throws IOException {
             
             int status = connection.getResponseCode();
             String contentType = connection.getContentType();
@@ -672,7 +689,11 @@ public class HttpClientService {
             T data = null;
             if (body.length > 0 && contentType != null && contentType.toLowerCase().contains(APPLICATION_JSON)) {
                 try {
-                    data = objectMapper.readValue(body, responseType);
+                    if (genericTypes.length > 0) {
+                        data = objectMapper.readValue(body, objectMapper.getTypeFactory().constructParametricType(responseType, genericTypes));
+                    } else {
+                        data = objectMapper.readValue(body, responseType);
+                    }
                 } catch (IOException exception) {
                     // Corps invalide, data reste null
                 }
